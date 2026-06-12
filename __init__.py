@@ -191,7 +191,28 @@ def register(ctx):
         handler=_tool_vault_store,
     )
 
+    # Register tool for the agent to list vault entries (read-only metadata)
+    ctx.register_tool(
+        name="vault_list",
+        toolset="vault",
+        schema={
+            "name": "vault_list",
+            "description": "List entries from the encrypted vault. Returns count, tags, and previews — full content requires the dashboard with password.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of entries to show (default 10, max 100)",
+                        "default": 10,
+                    },
+                },
+            },
+        },
+        handler=_tool_vault_list,
+    )
+
     # Register hook to cache assistant responses
     ctx.register_hook("post_llm_call", _cache_assistant_response)
 
-    logger.info("vault plugin registered — /vault, vault_store")
+    logger.info("vault plugin registered — /vault, vault_store, vault_list")

@@ -14,9 +14,14 @@
   var API = {
     _req: function (path, opts) {
       opts = opts || {};
+      var headers = opts.headers || { "Content-Type": "application/json" };
+      /* Inject dashboard session token for loopback auth */
+      if (window.__HERMES_SESSION_TOKEN__) {
+        headers["X-Hermes-Session-Token"] = window.__HERMES_SESSION_TOKEN__;
+      }
       return fetch(path, {
         method: opts.method || "GET",
-        headers: opts.headers || { "Content-Type": "application/json" },
+        headers: headers,
         body: opts.body || null,
       }).then(function (r) {
         if (!r.ok) {
