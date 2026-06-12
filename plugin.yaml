@@ -4,6 +4,5 @@ description: Encrypted vault — save assistant messages via /vault, view in das
 author: Hermes
 provides_tools:
   - vault_store
-  - vault_list
 provides_hooks:
   - post_llm_call

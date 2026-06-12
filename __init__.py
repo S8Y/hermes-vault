@@ -4,7 +4,6 @@ Hermes Vault Plugin — encrypted message vault with /vault command and dashboar
 Registration wiring:
 - Slash command `/vault [tag]` — saves the last assistant message to the vault
 - Tool `vault_store` — tool-callable version (agent uses when it decides to)
-- Tool `vault_list` — lists entries (requires password on dashboard)
 - Hook `post_llm_call` — caches the last assistant response
 """
 
@@ -192,28 +191,7 @@ def register(ctx):
         handler=_tool_vault_store,
     )
 
-    # Register tool to list vault entries (summary only)
-    ctx.register_tool(
-        name="vault_list",
-        toolset="vault",
-        schema={
-            "name": "vault_list",
-            "description": "List entries in the vault. Returns counts and previews "
-                           "only — full content requires the dashboard with the vault password.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum entries to show (default 10, max 100)",
-                    },
-                },
-            },
-        },
-        handler=_tool_vault_list,
-    )
-
     # Register hook to cache assistant responses
     ctx.register_hook("post_llm_call", _cache_assistant_response)
 
-    logger.info("vault plugin registered — /vault, vault_store, vault_list")
+    logger.info("vault plugin registered — /vault, vault_store")

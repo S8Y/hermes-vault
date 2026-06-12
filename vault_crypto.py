@@ -17,6 +17,7 @@ PLUGIN_DIR = Path(__file__).parent
 KEY_FILE = PLUGIN_DIR / "secret.key"
 SALT_FILE = PLUGIN_DIR / "salt.bin"
 VAULT_FILE = PLUGIN_DIR / "vault.enc"
+HASH_FILE = PLUGIN_DIR / "vault.hash"
 
 KEY_SIZE = 32  # 256-bit AES key
 NONCE_SIZE = 12  # 96-bit GCM nonce
@@ -86,22 +87,59 @@ def ensure_key() -> bytes:
     return key
 
 
+def hash_is_configured() -> bool:
+    """
+    Check whether a vault password hash is configured — either via env var
+    or local hash file. Used by the dashboard to decide if setup is needed.
+    """
+    if os.environ.get("HERMES_VAULT_PASS_HASH", ""):
+        return True
+    if HASH_FILE.exists():
+        raw = HASH_FILE.read_bytes().strip()
+        return len(raw) > 0
+    return False
+
+
+def store_password_hash(password: str) -> str:
+    """
+    Generate salt + hash for a password, persist the salt and hash file.
+    Intended for first-run setup from the dashboard.
+    Returns the hex hash (also stored to HASH_FILE).
+    """
+    h = get_password_hash(password)  # generates salt too
+    _ensure_dir()
+    HASH_FILE.write_text(h + "\n")
+    HASH_FILE.chmod(0o400)
+    logger.info("vault password hash stored locally")
+    return h
+
+
+def get_stored_hash() -> str | None:
+    """
+    Read the configured password hash from env var or local file.
+    Returns the hex string or None if not configured.
+    """
+    h = os.environ.get("HERMES_VAULT_PASS_HASH", "")
+    if h:
+        return h.strip().lower()
+    if HASH_FILE.exists():
+        raw = HASH_FILE.read_bytes().strip()
+        if raw:
+            return raw.decode("utf-8").strip().lower()
+    return None
+
+
 def verify_password(password: str) -> bool:
     """
-    Check a password against HERMES_VAULT_PASS_HASH env var.
-    The env var stores hex(scrypt(password, salt=salt)).
-    The salt is read from SALT_FILE (generated when env is first detected).
-    Returns True if the password matches, False otherwise (including when
-    the env var is not set — meaning no password protection is configured).
+    Check a password against the configured hash (env var or local file).
+    The hash stores hex(scrypt(password, salt=salt)).
+    The salt is read from SALT_FILE (generated on first get_password_hash call).
+    Returns True if the password matches, False otherwise.
     """
-    import os
+    stored = get_stored_hash()
+    if not stored:
+        return False  # no password configured at all
 
-    stored_hash_hex = os.environ.get("HERMES_VAULT_PASS_HASH")
-    if not stored_hash_hex:
-        # No password configured: allow access (only when no vault exists yet too)
-        return False
-
-    _ensure_dir()
     if not SALT_FILE.exists():
         return False
 
@@ -110,7 +148,7 @@ def verify_password(password: str) -> bool:
         return False
 
     computed = _scrypt_hash(password, salt)
-    return computed.hex() == stored_hash_hex.strip().lower()
+    return computed.hex() == stored
 
 
 def get_password_hash(password: str) -> str:

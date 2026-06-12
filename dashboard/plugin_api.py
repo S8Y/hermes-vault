@@ -3,15 +3,14 @@ Vault Dashboard Plugin API.
 
 FastAPI routes mounted at /api/plugins/vault/ by the Hermes dashboard.
 Provides:
-  - GET  /status    — vault status (locked/unlocked/empty, entry count)
+  - GET  /status    — vault status (needs_setup / locked / unlocked, entry count)
+  - POST /setup     — first-run: set vault password (generates salt, stores hash)
   - POST /unlock    — verify vault password
-  - POST /entries   — return decrypted vault entries (requires password)
-  - GET  /setup-hash?password=... — generate env var hash (localhost only)
+  - POST /entries   — return decrypted vault entries (requires valid password)
 """
 
 import os
 import sys
-import json
 import logging
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
@@ -23,15 +22,15 @@ _plugin_dir = Path(__file__).resolve().parent.parent
 if str(_plugin_dir) not in sys.path:
     sys.path.insert(0, str(_plugin_dir))
 
-from vault_crypto import read_vault, verify_password, get_password_hash, VAULT_FILE  # noqa: E402
+from vault_crypto import (  # noqa: E402
+    read_vault,
+    verify_password,
+    hash_is_configured,
+    store_password_hash,
+    VAULT_FILE,
+)
 
 router = APIRouter()
-
-VAULT_PASS_HASH_VAR = "HERMES_VAULT_PASS_HASH"
-
-
-def _has_password() -> bool:
-    return bool(os.environ.get(VAULT_PASS_HASH_VAR, ""))
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
@@ -39,8 +38,8 @@ def _has_password() -> bool:
 
 @router.get("/status")
 async def status():
-    """Check vault status — whether password is configured and entry count."""
-    pw = _has_password()
+    """Check vault status."""
+    configured = hash_is_configured()
     vault_exists = VAULT_FILE.exists() and VAULT_FILE.stat().st_size > 0
     entry_count = 0
     if vault_exists:
@@ -50,13 +49,48 @@ async def status():
         except Exception as e:
             logger.warning(f"vault status read failed: {e}")
 
+    if not configured:
+        return {
+            "ok": True,
+            "status": "needs_setup",
+            "has_password": False,
+            "vault_exists": vault_exists,
+            "entry_count": entry_count,
+        }
+
     return {
         "ok": True,
-        "has_password": pw,
+        "status": "locked",
+        "has_password": True,
         "vault_exists": vault_exists,
         "entry_count": entry_count,
-        "locked": pw,  # locked if password is configured
     }
+
+
+@router.post("/setup")
+async def setup(body: dict):
+    """
+    First-run setup: set the vault password.
+    Body: {"password": "..."}
+    Generates salt, stores the scrypt hash locally.
+    Returns ok=True on success.
+    """
+    password = body.get("password", "")
+    if not password:
+        raise HTTPException(status_code=400, detail="Password required")
+    if len(password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+
+    # Prevent overwriting an existing configuration
+    if hash_is_configured():
+        raise HTTPException(status_code=409, detail="Vault password already configured")
+
+    try:
+        store_password_hash(password)
+        return {"ok": True, "status": "locked"}
+    except Exception as e:
+        logger.exception("vault setup failed")
+        raise HTTPException(status_code=500, detail=f"Failed to save vault password: {e}")
 
 
 @router.post("/unlock")
@@ -80,38 +114,21 @@ async def entries(body: dict = None):
     """
     Return decrypted vault entries.
     Body: {"password": "..."}
-    Requires valid password if HERMES_VAULT_PASS_HASH is set.
+    Requires valid password if the vault hash is configured.
     """
     if body is None:
         body = {}
 
-    pw = _has_password()
-    if pw:
-        password = body.get("password", "")
-        if not password or not verify_password(password):
-            raise HTTPException(status_code=401, detail="Invalid vault password")
+    if not hash_is_configured():
+        raise HTTPException(status_code=400, detail="Vault not configured — set a password first")
+
+    password = body.get("password", "")
+    if not password or not verify_password(password):
+        raise HTTPException(status_code=401, detail="Invalid vault password")
 
     entries_list = read_vault()
     return {
         "ok": True,
         "count": len(entries_list),
         "entries": entries_list,
-    }
-
-
-@router.get("/setup-hash")
-async def setup_hash(password: str = ""):
-    """
-    Generate the env var hash for a given password.
-    Returns the value to set as HERMES_VAULT_PASS_HASH.
-    WARNING: Only use this over localhost!
-    """
-    if not password:
-        raise HTTPException(status_code=400, detail="password query param required")
-    h = get_password_hash(password)
-    return {
-        "ok": True,
-        "env_var": VAULT_PASS_HASH_VAR,
-        "value": h,
-        "instruction": f"Add this to your shell rc or .env: export {VAULT_PASS_HASH_VAR}={h}",
     }
