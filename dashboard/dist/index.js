@@ -9,6 +9,36 @@
   var useEffect = SDK.React.useEffect;
   var useCallback = SDK.React.useCallback;
 
+  /* ──── Raw API helper (bypasses SDK.fetchJSON auth probe) ── */
+
+  var API = {
+    _req: function (path, opts) {
+      opts = opts || {};
+      return fetch(path, {
+        method: opts.method || "GET",
+        headers: opts.headers || { "Content-Type": "application/json" },
+        body: opts.body || null,
+      }).then(function (r) {
+        if (!r.ok) {
+          return r.json().then(function (j) {
+            throw new Error(j.detail || j.error || (r.status + " " + r.statusText));
+          }).catch(function (e) {
+            if (e instanceof SyntaxError) throw new Error(r.status + " " + r.statusText);
+            throw e;
+          });
+        }
+        return r.json();
+      });
+    },
+    get: function (path) { return API._req(path); },
+    post: function (path, body) {
+      return API._req(path, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+  };
+
   /* ──── Helpers ─────────────────────────────────────── */
 
   var H = {
@@ -46,21 +76,19 @@
       }
       setLoading(true);
       setError("");
-      SDK.fetchJSON("/api/plugins/vault/setup", {
-        method: "POST",
-        body: JSON.stringify({ password: pw1 }),
-        headers: { "Content-Type": "application/json" },
-      }).then(function (res) {
-        setLoading(false);
-        if (res.ok) {
-          props.onSetup(pw1);
-        } else {
-          setError(res.detail || "Failed to set password");
-        }
-      }).catch(function (err) {
-        setLoading(false);
-        setError("Connection error: " + (err.message || err));
-      });
+      API.post("/api/plugins/vault/setup", { password: pw1 })
+        .then(function (res) {
+          setLoading(false);
+          if (res.ok) {
+            props.onSetup(pw1);
+          } else {
+            setError(res.detail || "Failed to set password");
+          }
+        })
+        .catch(function (err) {
+          setLoading(false);
+          setError("Connection error: " + (err.message || err));
+        });
     }, [pw1, pw2, props.onSetup]);
 
     var handleKey = useCallback(function (ev) {
@@ -118,25 +146,23 @@
       if (!password) return;
       setLoading(true);
       setError("");
-      SDK.fetchJSON("/api/plugins/vault/unlock", {
-        method: "POST",
-        body: JSON.stringify({ password: password }),
-        headers: { "Content-Type": "application/json" },
-      }).then(function (res) {
-        setLoading(false);
-        if (res.locked === false && res.ok) {
-          props.onUnlock(password);
-        } else {
-          setError(res.error || "Incorrect password");
-          if (passwordRef.current) {
-            passwordRef.current.value = "";
-            passwordRef.current.focus();
+      API.post("/api/plugins/vault/unlock", { password: password })
+        .then(function (res) {
+          setLoading(false);
+          if (res.locked === false && res.ok) {
+            props.onUnlock(password);
+          } else {
+            setError(res.error || "Incorrect password");
+            if (passwordRef.current) {
+              passwordRef.current.value = "";
+              passwordRef.current.focus();
+            }
           }
-        }
-      }).catch(function (err) {
-        setLoading(false);
-        setError("Connection error: " + (err.message || err));
-      });
+        })
+        .catch(function (err) {
+          setLoading(false);
+          setError("Connection error: " + (err.message || err));
+        });
     }, [password, props.onUnlock]);
 
     var handleKey = useCallback(function (ev) {
@@ -231,20 +257,24 @@
 
     /* Load vault status on mount */
     useEffect(function () {
-      SDK.fetchJSON("/api/plugins/vault/status")
+      API.get("/api/plugins/vault/status")
         .then(function (res) {
           if (res.status === "needs_setup") {
             setStatus("needs_setup");
           } else if (res.status === "locked") {
             setStatus("locked");
-          } else {
+          } else if (res.status === "error" || res.error) {
             setStatus("error");
-            setError("Unknown vault status");
+            setError(res.error || res.detail || "Vault unavailable");
+          } else {
+            /* Fallback: treat any non-matching response as needs_setup
+               so the user always sees actionable UI instead of a dead state */
+            setStatus("needs_setup");
           }
         })
         .catch(function (err) {
           setStatus("error");
-          setError("Failed to load vault status: " + (err.message || err));
+          setError("Vault not reachable: " + (err.message || err));
         });
     }, []);
 
@@ -253,22 +283,20 @@
       setStatus("loading_entries");
       setError("");
       setVaultPassword(password);
-      SDK.fetchJSON("/api/plugins/vault/entries", {
-        method: "POST",
-        body: JSON.stringify({ password: password }),
-        headers: { "Content-Type": "application/json" },
-      }).then(function (res) {
-        if (res.ok) {
-          setEntries(res.entries || []);
-          setStatus("unlocked");
-        } else {
+      API.post("/api/plugins/vault/entries", { password: password })
+        .then(function (res) {
+          if (res.ok) {
+            setEntries(res.entries || []);
+            setStatus("unlocked");
+          } else {
+            setStatus("locked");
+            setError(res.detail || "Failed to load entries");
+          }
+        })
+        .catch(function (err) {
           setStatus("locked");
-          setError(res.detail || "Failed to load entries");
-        }
-      }).catch(function (err) {
-        setStatus("locked");
-        setError("Connection error: " + (err.message || err));
-      });
+          setError("Connection error: " + (err.message || err));
+        });
     }, []);
 
     /* Handle unlock */
@@ -276,22 +304,20 @@
       setStatus("loading_entries");
       setError("");
       setVaultPassword(password);
-      SDK.fetchJSON("/api/plugins/vault/entries", {
-        method: "POST",
-        body: JSON.stringify({ password: password }),
-        headers: { "Content-Type": "application/json" },
-      }).then(function (res) {
-        if (res.ok) {
-          setEntries(res.entries || []);
-          setStatus("unlocked");
-        } else {
+      API.post("/api/plugins/vault/entries", { password: password })
+        .then(function (res) {
+          if (res.ok) {
+            setEntries(res.entries || []);
+            setStatus("unlocked");
+          } else {
+            setStatus("locked");
+            setError(res.detail || "Failed to load entries");
+          }
+        })
+        .catch(function (err) {
           setStatus("locked");
-          setError(res.detail || "Failed to load entries");
-        }
-      }).catch(function (err) {
-        setStatus("locked");
-        setError("Connection error: " + (err.message || err));
-      });
+          setError("Connection error: " + (err.message || err));
+        });
     }, []);
 
     var handleLock = useCallback(function () {
@@ -327,8 +353,10 @@
       return e("div", { className: "vault-page" },
         e("div", { className: "vault-lock-screen" },
           e("div", { className: "vault-lock-icon" }, "\u26A0\uFE0F"),
-          e("div", { className: "vault-lock-title" }, "Error"),
-          e("div", { className: "vault-error" }, error || "Something went wrong")
+          e("div", { className: "vault-lock-title" }, "Vault Error"),
+          e("div", { className: "vault-error", style: { whiteSpace: "pre-wrap", maxWidth: "28rem" } },
+            error || "Something went wrong"
+          )
         )
       );
     }
