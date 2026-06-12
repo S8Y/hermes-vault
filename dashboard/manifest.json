@@ -1,0 +1,14 @@
+{
+  "name": "vault",
+  "label": "Vault",
+  "description": "Encrypted message vault — view your saved entries with password decryption.",
+  "icon": "Shield",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/vault",
+    "position": "after:config"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}
